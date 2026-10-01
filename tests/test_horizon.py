@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from sentinel.config import HorizonConfig, SceneConfig
 from sentinel.horizon import estimate_attitude, estimate_horizon
@@ -17,13 +18,14 @@ def test_attitude_recovered_when_horizon_visible():
     assert ratio > 0.5
 
 
-def test_roll_recovered():
-    cfg = SceneConfig(depression=22.0, roll=8.0)
+@pytest.mark.parametrize("roll", [0.0, 8.0, 15.0, 25.0])
+def test_roll_recovered_across_range(roll):
+    cfg = SceneConfig(depression=25.0, roll=roll)
     scene = GeoScene(cfg)
     frame = scene.render()
     est = estimate_attitude(frame.gray, scene.intrinsics.K, HorizonConfig(), seed=0)
     assert est is not None
-    assert abs(est[1] - 8.0) < 3.0
+    assert abs(est[1] - roll) < 3.0
 
 
 def test_no_horizon_returns_none_when_looking_down():

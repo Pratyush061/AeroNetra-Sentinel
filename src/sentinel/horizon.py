@@ -37,9 +37,19 @@ def column_transition_rows(gray: np.ndarray, mag: np.ndarray | None = None) -> n
     window = np.ones(9) / 9.0
     smoothed = np.apply_along_axis(lambda c: np.convolve(c, window, mode="same"), 0, mag)
 
-    height = mag.shape[0]
+    height, width = mag.shape
+    band = max(3, height // 48)
     cands = []
-    for x in range(mag.shape[1]):
+    for x in range(width):
+        # Only trust columns that genuinely have smooth sky at the top. Where a
+        # tilted horizon leaves the frame, ground touches the top edge and the
+        # "onset" there is meaningless -- such columns would vote for a false
+        # horizontal line.
+        col_top = float(mag[:band, x].mean())
+        col_bot = float(mag[-band:, x].mean())
+        if col_bot <= 3.0 or col_top > 0.5 * col_bot:
+            continue
+
         col = smoothed[:, x]
         peak = float(col.max())
         if peak < 5.0:                      # essentially textureless column
@@ -51,8 +61,8 @@ def column_transition_rows(gray: np.ndarray, mag: np.ndarray | None = None) -> n
         y = int(np.argmax(above))
         # The region below the candidate must be clearly more textured than the
         # region above, otherwise this column has no visible horizon.
-        top = float(mag[:y].mean()) if y > 0 else 0.0
-        bottom = float(mag[y:].mean())
+        top = float(mag[:y, x].mean()) if y > 0 else 0.0
+        bottom = float(mag[y:, x].mean())
         if bottom < 3.0 or bottom < 2.0 * max(top, 1e-6):
             continue
         cands.append((x, min(y, height - 1)))
@@ -98,14 +108,17 @@ def estimate_horizon(gray: np.ndarray, cfg: HorizonConfig, seed: int = 0):
     """
     mag = edge_magnitude(gray)
     h = mag.shape[0]
-    # Sample only the very top rows: sky is smooth there, while ground is
-    # heavily textured (especially near the horizon, where perspective
-    # compresses texture). If the top is textured, there is no visible sky.
+    # Sky is smooth at the very top of the frame; ground is heavily textured
+    # (especially near the horizon, where perspective compresses texture). We
+    # judge this per column so a *rolled* horizon -- ground on one side, sky on
+    # the other -- is still recognised. If almost no column has a smooth top,
+    # there is no visible sky and no horizon to find.
     band = max(3, h // 48)
-    top = float(mag[:band].mean())
-    bottom = float(mag[-band:].mean())
-    if bottom < 3.0 or top > 0.5 * bottom:
-        return None                      # no sky region -> no horizon to find
+    top = mag[:band, :].mean(axis=0)
+    bottom = mag[-band:, :].mean(axis=0)
+    has_sky = (bottom > 3.0) & (top < 0.5 * np.maximum(bottom, 1e-6))
+    if float(has_sky.mean()) < 0.3:
+        return None
     points = column_transition_rows(gray, mag)
     return fit_line_ransac(points, cfg, seed=seed)
 
